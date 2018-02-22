@@ -198,7 +198,10 @@ module.exports = function (source, inputSourceMap) {
             var jsonObj;
             enrichExport(exportVarTree[rootVar], rootVar);
             jsonObj = JSON.stringify(exportVarTree[rootVar]).replace(/(['"])%(.*?)%\1/g, '$2');
-            postfix += 'exports.' + rootVar + '=' + jsonObj + ';';
+	    if (jsonObj == '{}') {
+                jsonObj = rootVar + ' || ' + jsonObj;
+            }
+	    postfix += 'exports.' + rootVar + '=' + jsonObj + ';';
         });
 
         if (config.es6mode && exportedVars.length) {
