@@ -199,7 +199,7 @@ module.exports = function (source, inputSourceMap) {
             enrichExport(exportVarTree[rootVar], rootVar);
             jsonObj = JSON.stringify(exportVarTree[rootVar]).replace(/(['"])%(.*?)%\1/g, '$2');
 	    if (jsonObj == '{}') {
-                jsonObj = rootVar + ' || ' + jsonObj;
+                jsonObj = rootVar + ' || { empty: true } ';
             }
 	    postfix += 'exports.' + rootVar + '=' + jsonObj + ';';
         });
@@ -226,7 +226,7 @@ module.exports = function (source, inputSourceMap) {
      * @returns {string}
      */
     function createPrefix(globalVarTree) {
-        var merge = "var __merge=require(" + loaderUtils.stringifyRequest(self, require.resolve('deep-extend')) + ");";
+        var merge = " /** @export */ __merge=require(" + loaderUtils.stringifyRequest(self, require.resolve('deep-extend')) + ");";
         prefix = '';
         Object.keys(globalVarTree).forEach(function (rootVar) {
             prefix += [
