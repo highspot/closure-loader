@@ -119,7 +119,8 @@ module.exports = function (source, inputSourceMap) {
         // if the required module is a parent of a provided module, use deep-extend so that injected
         // namespaces are not overwritten
         if (isParent(key, exportedVars)) {
-          return source.replace(replaceRegex, key + '=__merge(' + requireString + ', (' + key + ' || {}));');
+          // return source.replace(replaceRegex, key + '=__merge(' + requireString + ', (' + key + ' || {}));');
+          return source.replace(replaceRegex, key + '=' + generateDeepMergeCode(requireString, `'${key}'`, false, true));
         } else {
           return source.replace(replaceRegex, key + '=' + requireString + ';');
         }
@@ -212,6 +213,56 @@ module.exports = function (source, inputSourceMap) {
     }
 
     /**
+     * Generates the code necessary to deeply merge an object with an object of the specified name
+     * 
+     * @param {object} toMerge 
+     * @param {string} mergeWith
+     * @returns {string} 
+     */
+    function generateDeepMergeCode(toMerge = {}, mergeWith = 'window', overwrite = false, addTrailingSemicolon = false) {
+        var serialized = toMerge.constructor == String ? toMerge : JSON.stringify(toMerge);
+        var clientMerger =
+        `(function() {
+            var __merger = function(toMerge, mergeWith, overwrite) {
+                if (!mergeWith) { throw 'Unable to merge with undefined object'; }
+                if (mergeWith.constructor == String) { /* Ensure this exists */
+                    if (mergeWith == 'window') { mergeWith = window; }
+                    else {
+                        var mergeParts = mergeWith.split(/\\./g);
+                        var where = window;
+                        mergeParts.map(function(w) {
+                            if (!where[w]) {
+                                where[w] = {};
+                            }
+                            if (!(where[w] instanceof Object)) { throw 'Invalid object'; }
+                            where = where[w];
+                        });
+                        mergeWith = where;
+                    }
+                }
+                var keys = Object.getOwnPropertyNames(toMerge);
+                keys.map(function(e) {
+                    var v = toMerge[e];
+                    var isHash = v instanceof Object && !(v instanceof Function || v instanceof Array || (window.Symbol && v instanceof Symbol));
+                    if (!mergeWith[e]) {
+                        mergeWith[e] = v; /* We can skip further iteration of this branch */
+                        return;
+                    }
+                    if (isHash) {
+                        __merger(v, mergeWith[e], overwrite);
+                    } else if (overwrite) {
+                        mergeWith[e] = v;
+                    }
+                });
+                return mergeWith;
+            };
+            return __merger(${serialized}, ${mergeWith}, ${overwrite});
+        })()`;
+        if (addTrailingSemicolon) { clientMerger += ';'; }
+        return clientMerger;
+    }
+
+    /**
      * Create a string to inject before the actual module code
      *
      * This will create all provided or required namespaces. It will merge those namespaces into an existing
@@ -226,23 +277,24 @@ module.exports = function (source, inputSourceMap) {
      * @returns {string}
      */
     function createPrefix(globalVarTree) {
-        var merge = " /** @export */ __merge=require(" + loaderUtils.stringifyRequest(self, require.resolve('deep-extend')) + ");";
-        prefix = '';
-        Object.keys(globalVarTree).forEach(function (rootVar) {
-            prefix += [
-                'var ',
-                rootVar,
-                '=__merge(',
-                rootVar,
-                '||__merge({}, window.',
-                rootVar,
-                '),',
-                JSON.stringify(globalVarTree[rootVar]),
-                ');'
-            ].join('');
-        });
+        // var merge = " /** @export */ window.__merge = window.__merge || require(" + loaderUtils.stringifyRequest(self, require.resolve('deep-extend')) + ");";
+        // prefix = '';
+        // Object.keys(globalVarTree).forEach(function (rootVar) {
+        //     prefix += [
+        //         'var ',
+        //         rootVar,
+        //         '=__merge(',
+        //         rootVar,
+        //         '||__merge({}, window.',
+        //         rootVar,
+        //         '),',
+        //         JSON.stringify(globalVarTree[rootVar]),
+        //         ');'
+        //     ].join('');
+        // });
 
-        return merge + "eval('" +  prefix.replace(/'/g, "\\'") + "');";
+        // return merge + "eval('" +  prefix.replace(/'/g, "\\'") + "');";
+        return generateDeepMergeCode(globalVarTree, 'window', true, true);
     }
 
     /**
