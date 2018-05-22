@@ -1,4 +1,6 @@
 var loaderUtils = require("loader-utils"),
+    fs = require('fs'),
+    pathUtil = require('path'),
 	merge = require('deep-extend'),
     mapBuilder = require('./dependencyMapBuilder'),
     SourceNode = require("source-map").SourceNode,
@@ -11,6 +13,9 @@ var loaderUtils = require("loader-utils"),
     },
     prefix, postfix;
 
+var timestampCache = {};
+var sharedProvideMap = {};
+
 
 module.exports = function (source, inputSourceMap) {
     var self = this,
@@ -19,7 +24,10 @@ module.exports = function (source, inputSourceMap) {
         originalSource = source,
         globalVars = [],
         exportedVars = [],
-        config;
+        config,
+        enableCache,
+        cachePath,
+        rootPath;
 
     if (typeof query === 'string' &&  query.length > 0) {
         query = loaderUtils.parseQuery(this.query);
@@ -28,12 +36,53 @@ module.exports = function (source, inputSourceMap) {
     this.cacheable && this.cacheable();
 
     config = merge({}, defaultConfig, this.options ? [query.config || "closureLoader"] : {}, query);
+    enableCache = !!config.cache;
+    rootPath = enableCache && config.root;
+    cachePath = enableCache && rootPath && config.cachePath || (() => { throw 'cachePath and root required when caching enabled' })();
+    // enableCache && console.log('\nCache path', cachePath, '\nRoot path', rootPath);
 
     mapBuilder(config.paths, config.watch, config.fileExt).then(function(provideMap) {
+        var modified = 0,
+            resourcePath = self.resource,
+            cachedPath;
+        if (enableCache) {
+            var shortPath = resourcePath.startsWith(rootPath) ? resourcePath.substring(config.root.length) : resourcePath;
+            shortPath.startsWith('/') && (shortPath = shortPath.substring(1));
+            cachedPath = pathUtil.resolve(
+                cachePath,
+                shortPath
+            );
+            (cachedPath == resourcePath) && (() => { throw 'cachedPath should not be the same as resourcePath' })();
+            !cachedPath.startsWith(cachePath) && (() => { throw 'cachedPath must begin with cachePath' })();
+            // console.log('\nCaching', cachedPath);
+            try {
+                if (fs.existsSync(resourcePath)) {
+                    // console.log('\nFound in cache');
+                    var fileStat = fs.statSync(resourcePath);
+                    modified = fileStat.mtimeMs;
+                    if (timestampCache[resourcePath] == modified) {
+                        // console.log("\nMatched");
+                        if (fs.existsSync(cachedPath) && (!inputSourceMap || fs.existsSync(cachedPath + '.map'))) {
+                            var cachedFileContent = fs.readFileSync(cachedPath);
+                            var cachedFileMap = inputSourceMap && fs.readFileSync(cachedPath + '.map');
+                            callback(null, cachedFileContent, cachedFileMap);
+                            return cachedFileContent;
+                        }
+                    }
+                }
+            } catch (ex) {
+                // console.log("\n\nException\n", ex);
+                throw ex;
+            }
+        }
+
+        syncProvideMap(provideMap, false);
+
         var provideRegExp = /goog\.provide *?\((['"])(.*?)\1\);?/,
             requireRegExp = /goog\.require *?\((['"])(.*?)\1\);?/,
             globalVarTree = {},
             exportVarTree = {},
+            requires      = {}
             matches;
 
         while (matches = provideRegExp.exec(source)) {
@@ -44,7 +93,7 @@ module.exports = function (source, inputSourceMap) {
 
         while (matches = requireRegExp.exec(source)) {
             globalVars.push(matches[2]);
-            source = replaceRequire(source, matches[2], matches[0], provideMap, exportedVars);
+            source = replaceRequire(source, matches[2], matches[0], provideMap, exportedVars, requires);
         }
 
         globalVars = globalVars
@@ -56,9 +105,10 @@ module.exports = function (source, inputSourceMap) {
             .filter(removeNested)
             .map(buildVarTree(exportVarTree));
 
-        prefix = createPrefix(globalVarTree);
+        prefix = createPrefix(globalVarTree, requires);
         postfix = createPostfix(exportVarTree, exportedVars, config);
 
+        var fileContent, mapContent;
         if(inputSourceMap) {
             var currentRequest = loaderUtils.getCurrentRequest(self),
                 node = SourceNode.fromStringWithSourceMap(originalSource, new SourceMapConsumer(inputSourceMap));
@@ -69,14 +119,52 @@ module.exports = function (source, inputSourceMap) {
                 file: currentRequest
             });
 
-            callback(null, prefix + "\n" + source + postfix, result.map.toJSON());
-            return;
+            fileContent = prefix + "\n" + source + postfix;
+            mapContent = result.map.toJSON();
+            enableCache && cacheFileAndMap(resourcePath, cachedPath, modified, fileContent, mapContent);
+            syncProvideMap(provideMap, true);
+            callback(null, fileContent, mapContent);
+        } else {
+            fileContent = prefix + "\n" + source + postfix;
+            enableCache && cacheFileAndMap(resourcePath, cachedPath, modified, fileContent, null);
+            syncProvideMap(provideMap, true);
+            callback(null, fileContent, inputSourceMap);
         }
-
-        callback(null, prefix + "\n" + source + postfix, inputSourceMap);
+        return fileContent;
     }).catch(function(error) {
       callback(error);
     });
+
+    function cacheFileAndMap(resourcePath, cachedPath, sourceTimestamp, fileContent, mapContent) {
+        try {
+            fs.writeFileSync(ensurePath(cachedPath), fileContent);
+            mapContent && fs.writeFileSync(cachedPath + '.map', mapContent);
+            timestampCache[resourcePath] = sourceTimestamp;
+        } catch (ex) {
+            // console.log('\n\nException while trying to cache content\n', ex);
+            throw ex;
+        }
+    }
+    function ensurePath(path) {
+        var pathParts = path.split(/\//g);
+        if (!path.endsWith('/')) { pathParts.pop(); }
+        if (fs.existsSync(pathParts.join('/'))) { return path; }
+        var checkPath;
+        for (var i = 0; i < pathParts.length; i++) {
+            if (!fs.existsSync(checkPath = pathParts.slice(0, i + 1).join('/') + '/')) {
+                fs.mkdirSync(checkPath);
+            }
+        }
+        return path;
+    }
+
+    function syncProvideMap(provideMap, toShared) {
+        toShared ?
+            Object.keys(provideMap).forEach(k => sharedProvideMap[k] = provideMap[k])
+            :
+            Object.keys(sharedProvideMap).forEach(k => provideMap[k] = sharedProvideMap[k])
+        ;
+    }
 
     /**
      * Escape a string for usage in a regular expression
@@ -105,16 +193,19 @@ module.exports = function (source, inputSourceMap) {
      * @param {Object} provideMap
      * @returns {string}
      */
-    function replaceRequire(source, key, search, provideMap, exportedVars) {
+    function replaceRequire(source, key, search, provideMap, exportedVars, requires) {
         var replaceRegex = new RegExp(escapeRegExp(search), 'g');
-        var path, requireString;
+        var path, pathKey, requireString;
 
         if (!provideMap[key]) {
             throw new Error("Can't find closure dependency " + key);
         }
 
         path = loaderUtils.stringifyRequest(self, provideMap[key]);
-        requireString = 'require(' + path + ').' + key;
+        // requireString = 'require(' + path + ').' + key;
+        pathKey = getPathKey(path);
+        requires[pathKey] = path.replace(/^"(.*)"$/, '$1');
+        requireString = pathKey + '.' + key;
 
         // if the required module is a parent of a provided module, use deep-extend so that injected
         // namespaces are not overwritten
@@ -124,6 +215,10 @@ module.exports = function (source, inputSourceMap) {
         } else {
           return source.replace(replaceRegex, key + '=' + requireString + ';');
         }
+    }
+
+    function getPathKey(path) {
+        return path.replace(/[^a-z0-9_]/ig, '_');
     }
 
     /**
@@ -276,7 +371,7 @@ module.exports = function (source, inputSourceMap) {
      * @param globalVarTree
      * @returns {string}
      */
-    function createPrefix(globalVarTree) {
+    function createPrefix(globalVarTree, requires) {
         // var merge = " /** @export */ window.__merge = window.__merge || require(" + loaderUtils.stringifyRequest(self, require.resolve('deep-extend')) + ");";
         // prefix = '';
         // Object.keys(globalVarTree).forEach(function (rootVar) {
@@ -294,7 +389,11 @@ module.exports = function (source, inputSourceMap) {
         // });
 
         // return merge + "eval('" +  prefix.replace(/'/g, "\\'") + "');";
-        return generateDeepMergeCode(globalVarTree, 'window', true, true);
+        var prefix = generateDeepMergeCode(globalVarTree, 'window', true, true);
+        prefix += '\n' + Object.getOwnPropertyNames(requires).map(r =>
+            'const ' + r + ' = require("' + requires[r] + '");'
+        ).join('\n');
+        return prefix;
     }
 
     /**
