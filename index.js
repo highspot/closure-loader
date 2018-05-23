@@ -15,6 +15,7 @@ var loaderUtils = require("loader-utils"),
 
 var timestampCache = {};
 var sharedProvideMap = {};
+var fileCache = {};
 
 
 module.exports = function (source, inputSourceMap) {
@@ -26,6 +27,7 @@ module.exports = function (source, inputSourceMap) {
         exportedVars = [],
         config,
         enableCache,
+        cacheToMemory = false,
         cachePath,
         rootPath;
 
@@ -37,39 +39,61 @@ module.exports = function (source, inputSourceMap) {
 
     config = merge({}, defaultConfig, this.options ? [query.config || "closureLoader"] : {}, query);
     enableCache = !!config.cache;
-    rootPath = enableCache && config.root;
-    cachePath = enableCache && rootPath && config.cachePath || (() => { throw 'cachePath and root required when caching enabled' })();
+    cacheToMemory = enableCache && config.cache == 'memory';
+    if (enableCache && !cacheToMemory) {
+        rootPath = config.root || (() => { throw 'root is required for file caching' })();
+        cachePath = config.cachePath || (() => { throw 'cachePath is required when file caching enabled' })();
+    }
     // enableCache && console.log('\nCache path', cachePath, '\nRoot path', rootPath);
 
     mapBuilder(config.paths, config.watch, config.fileExt).then(function(provideMap) {
-        var modified = 0,
+        var modified,
             resourcePath = self.resource,
             cachedPath;
+
         if (enableCache) {
-            var shortPath = resourcePath.startsWith(rootPath) ? resourcePath.substring(config.root.length) : resourcePath;
-            shortPath.startsWith('/') && (shortPath = shortPath.substring(1));
-            cachedPath = pathUtil.resolve(
-                cachePath,
-                shortPath
-            );
-            (cachedPath == resourcePath) && (() => { throw 'cachedPath should not be the same as resourcePath' })();
-            !cachedPath.startsWith(cachePath) && (() => { throw 'cachedPath must begin with cachePath' })();
-            // console.log('\nCaching', cachedPath);
+            if (!cacheToMemory) {
+                var shortPath = resourcePath.startsWith(rootPath) ? resourcePath.substring(config.root.length) : resourcePath;
+                shortPath.startsWith('/') && (shortPath = shortPath.substring(1));
+                cachedPath = pathUtil.resolve(
+                    cachePath,
+                    shortPath
+                );
+                (cachedPath == resourcePath) && (() => { throw 'cachedPath should not be the same as resourcePath' })();
+                !cachedPath.startsWith(cachePath) && (() => { throw 'cachedPath must begin with cachePath' })();
+                // console.log('\nCaching', cachedPath);
+            }
             try {
-                if (fs.existsSync(resourcePath)) {
-                    // console.log('\nFound in cache');
-                    var fileStat = fs.statSync(resourcePath);
-                    modified = fileStat.mtimeMs;
-                    if (timestampCache[resourcePath] == modified) {
-                        // console.log("\nMatched");
-                        if (fs.existsSync(cachedPath) && (!inputSourceMap || fs.existsSync(cachedPath + '.map'))) {
-                            var cachedFileContent = fs.readFileSync(cachedPath);
-                            var cachedFileMap = inputSourceMap && fs.readFileSync(cachedPath + '.map');
-                            callback(null, cachedFileContent, cachedFileMap);
-                            return cachedFileContent;
-                        }
+                // if (fs.existsSync(cachedPath)) {
+                //     // console.log('\nFound in cache');
+                //     var fileStat = fs.statSync(resourcePath);
+                //     modified = fileStat.mtimeMs;
+                //     if (timestampCache[resourcePath] == modified) {
+                //         // console.log("\nMatched");
+                //         if (!inputSourceMap || fs.existsSync(cachedPath + '.map')) {
+                //             var cachedFileContent = fs.readFileSync(cachedPath);
+                //             var cachedFileMap = inputSourceMap && fs.readFileSync(cachedPath + '.map');
+                //             callback(null, cachedFileContent, cachedFileMap);
+                //             return cachedFileContent;
+                //         }
+                //     }
+                // }
+                var shouldReturn = false;
+                ifExistsInCache(resourcePath, cachedPath, function(exists) {
+                    if (exists) {
+                        // console.log(resourcePath, 'exists in cache');
+                        var fileStat = fs.statSync(resourcePath);
+                        modified = fileStat.mtimeMs;
+                        compareCached(resourcePath, cachedPath, modified, inputSourceMap, function(matches, content) {
+                            if (matches) {
+                                // console.log(resourcePath, 'matched cache');
+                                callback(null, content.file, content.map);
+                                shouldReturn = true;
+                            }
+                        });
                     }
-                }
+                });
+                if (shouldReturn) { return; }
             } catch (ex) {
                 // console.log("\n\nException\n", ex);
                 throw ex;
@@ -78,8 +102,8 @@ module.exports = function (source, inputSourceMap) {
 
         syncProvideMap(provideMap, false);
 
-        var provideRegExp = /goog\.provide *?\((['"])(.*?)\1\);?/,
-            requireRegExp = /goog\.require *?\((['"])(.*?)\1\);?/,
+        var provideRegExp = /(?<!\/\/.*)goog\.provide *?\((['"])(.*?)\1\);?/,
+            requireRegExp = /(?<!\/\/.*)goog\.require *?\((['"])(.*?)\1\);?/,
             globalVarTree = {},
             exportVarTree = {},
             requires      = {}
@@ -136,13 +160,23 @@ module.exports = function (source, inputSourceMap) {
     });
 
     function cacheFileAndMap(resourcePath, cachedPath, sourceTimestamp, fileContent, mapContent) {
-        try {
-            fs.writeFileSync(ensurePath(cachedPath), fileContent);
-            mapContent && fs.writeFileSync(cachedPath + '.map', mapContent);
+        if (!enableCache) { return false; }
+        if (cacheToMemory) {
+            fileCache[resourcePath] = {
+                file: fileContent,
+                map: mapContent,
+                modified: sourceTimestamp
+            };
             timestampCache[resourcePath] = sourceTimestamp;
-        } catch (ex) {
-            // console.log('\n\nException while trying to cache content\n', ex);
-            throw ex;
+        } else {
+            try {
+                fs.writeFileSync(ensurePath(cachedPath), fileContent);
+                mapContent && fs.writeFileSync(cachedPath + '.map', mapContent);
+                timestampCache[resourcePath] = sourceTimestamp;
+            } catch (ex) {
+                // console.log('\n\nException while trying to cache content\n', ex);
+                throw ex;
+            }
         }
     }
     function ensurePath(path) {
@@ -156,6 +190,48 @@ module.exports = function (source, inputSourceMap) {
             }
         }
         return path;
+    }
+    function ifExistsInCache(resourcePath, cachedPath, callback) {
+        if (!enableCache) { callback && callback(false); return false; }
+        var exists = cacheToMemory ? (resourcePath in fileCache) : fs.existsSync(cachedPath);
+        callback && callback(exists);
+        return exists;
+    }
+    function compareCached(resourcePath, cachedPath, modified = null, inputSourceMap, callback) {
+        if (!enableCache) { callback && callback(false); return false; }
+        if (!modified) {
+            var fileStat = fs.statSync(resourcePath);
+            modified = fileStat.mtimeMs;
+        }
+        if (timestampCache[resourcePath] != modified) {
+            delete timestampCache[resourcePath];
+            if (cacheToMemory && (resourcePath in fileCache)) {
+                delete fileCache[resourcePath];
+            }
+            callback && callback(false);
+            return false;
+        }
+        if (cacheToMemory) {
+            if (resourcePath in fileCache) {
+                callback && callback(true, fileCache[resourcePath]);
+                return fileCache[resourcePath];
+            }
+        } else {
+            if (ifExistsInCache(resourcePath)) {
+                if (!inputSourceMap || fs.existsSync(cachedPath)) {
+                    var cachedFileContent = fs.readFileSync(cachedPath);
+                    var cachedFileMap = fs.existsSync(cachedPath + '.map') && fs.readFileSync(cachedPath + '.map');
+                    var reply = {
+                        file: cachedFileContent,
+                        map: cachedFileMap
+                    };
+                    callback && callback(true, reply);
+                    return reply;
+                }
+            }
+        }
+        callback && callback(false);
+        return false;
     }
 
     function syncProvideMap(provideMap, toShared) {
@@ -389,7 +465,9 @@ module.exports = function (source, inputSourceMap) {
         // });
 
         // return merge + "eval('" +  prefix.replace(/'/g, "\\'") + "');";
-        var prefix = generateDeepMergeCode(globalVarTree, 'window', true, true);
+        // var prefix = generateDeepMergeCode(globalVarTree, 'window', true, true);
+        var prefix = 'window.__merge = window.__merge || require(' + loaderUtils.stringifyRequest(self, require.resolve("./merger.js")) + ').merge;\n';
+        prefix += '__merge(' + JSON.stringify(globalVarTree) + ', window, true, true);\n';
         prefix += '\n' + Object.getOwnPropertyNames(requires).map(r =>
             'const ' + r + ' = require("' + requires[r] + '");'
         ).join('\n');
