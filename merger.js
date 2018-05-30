@@ -1,4 +1,7 @@
-function deepMerge(toMerge = {}, mergeWith = 'window', overwrite = false) {
+function deepMerge(toMerge, mergeWith, overwrite) {
+  if (!toMerge) { toMerge = {}; }
+  if (!mergeWith) { mergeWith = 'window'; }
+  if (overwrite === undefined) { overwrite = false; }
   if (!mergeWith) { throw 'Unable to merge with undefined object'; }
   if (mergeWith.constructor == String) { /* Ensure this exists */
     if (mergeWith == 'window') { mergeWith = window; }
