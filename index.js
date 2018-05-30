@@ -469,7 +469,7 @@ module.exports = function (source, inputSourceMap) {
         var prefix = 'window.__merge = window.__merge || require(' + loaderUtils.stringifyRequest(self, require.resolve("./merger.js")) + ').merge;\n';
         prefix += '__merge(' + JSON.stringify(globalVarTree) + ', window, true, true);\n';
         prefix += '\n' + Object.getOwnPropertyNames(requires).map(r =>
-            'const ' + r + ' = require("' + requires[r] + '");'
+            'var ' + r + ' = require("' + requires[r] + '");'
         ).join('\n');
         return prefix;
     }
