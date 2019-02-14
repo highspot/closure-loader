@@ -366,18 +366,20 @@ module.exports = function (source, inputSourceMap) {
      */
     function createPostfix(exportVarTree, exportedVars, config) {
         postfix = '\n;';
-        Object.keys(exportVarTree).forEach(function (rootVar) {
-            var jsonObj;
+        Object.keys(exportVarTree).forEach((rootVar) => {
+            let jsonObj;
             enrichExport(exportVarTree[rootVar], rootVar);
             jsonObj = JSON.stringify(exportVarTree[rootVar]).replace(/(['"])%(.*?)%\1/g, '$2');
-	    if (jsonObj == '{}') {
-                jsonObj = rootVar + ' || { empty: true } ';
+	        if (jsonObj === '{}') {
+                jsonObj = `window.${rootVar} || __mergeObj.${rootVar} || typeof(${rootVar}) !== 'undefined' && ${rootVar} || { empty: true }`;
             }
-	    postfix += 'exports.' + rootVar + '=' + jsonObj + ';';
+            postfix += `var ${rootVar}_jsonObj = ${jsonObj};`;
+            postfix += `if (typeof(${rootVar}) === 'object') { __merge(${rootVar}, ${rootVar}_jsonObj); }`;
+            postfix += `export var ${rootVar} = typeof(${rootVar}) !== 'undefined' ? ${rootVar} : ${rootVar}_jsonObj;`;
         });
 
         if (config.es6mode && exportedVars.length) {
-            postfix += 'exports.default=' + exportedVars.shift() + ';exports.__esModule=true;';
+            postfix += `export default ${exportedVars.shift()};`;
         }
 
         return postfix;
@@ -385,10 +387,10 @@ module.exports = function (source, inputSourceMap) {
 
     /**
      * Generates the code necessary to deeply merge an object with an object of the specified name
-     * 
-     * @param {object} toMerge 
+     *
+     * @param {object} toMerge
      * @param {string} mergeWith
-     * @returns {string} 
+     * @returns {string}
      */
     function generateDeepMergeCode(toMerge = {}, mergeWith = 'window', overwrite = false, addTrailingSemicolon = false) {
         var serialized = toMerge.constructor == String ? toMerge : JSON.stringify(toMerge);
@@ -448,28 +450,14 @@ module.exports = function (source, inputSourceMap) {
      * @returns {string}
      */
     function createPrefix(globalVarTree, requires) {
-        // var merge = " /** @export */ window.__merge = window.__merge || require(" + loaderUtils.stringifyRequest(self, require.resolve('deep-extend')) + ");";
-        // prefix = '';
-        // Object.keys(globalVarTree).forEach(function (rootVar) {
-        //     prefix += [
-        //         'var ',
-        //         rootVar,
-        //         '=__merge(',
-        //         rootVar,
-        //         '||__merge({}, window.',
-        //         rootVar,
-        //         '),',
-        //         JSON.stringify(globalVarTree[rootVar]),
-        //         ');'
-        //     ].join('');
-        // });
-
-        // return merge + "eval('" +  prefix.replace(/'/g, "\\'") + "');";
-        // var prefix = generateDeepMergeCode(globalVarTree, 'window', true, true);
-        var prefix = 'window.__merge = window.__merge || require(' + loaderUtils.stringifyRequest(self, require.resolve("./merger.js")) + ').merge;\n';
-        prefix += '__merge(' + JSON.stringify(globalVarTree) + ', window, true, true);\n';
+        let prefix = `window.__merge = window.__merge || require(${loaderUtils.stringifyRequest(self, require.resolve("./merger.js"))}).merge;\n`;
+        prefix += `var __mergeObj = ${JSON.stringify(globalVarTree)};\n`;
+        prefix += '__merge(__mergeObj, window, true, true);\n';
         prefix += '\n' + Object.getOwnPropertyNames(requires).map(r =>
-            'var ' + r + ' = require("' + requires[r] + '");'
+            `var ${r} = require("${requires[r]}");`
+        ).join('\n');
+        prefix += '\n' + Object.keys(globalVarTree).filter(key => !requires[key]).map(key =>
+            `var ${key} = typeof(${key}) !== 'undefined' ? ${key} : (window.${key} || __mergeObj.${key});`
         ).join('\n');
         return prefix;
     }
