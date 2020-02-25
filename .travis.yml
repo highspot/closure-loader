@@ -1,0 +1,31 @@
+language: node_js
+sudo: false
+node_js: 8
+# addons:
+#   apt:
+#     packages:
+#       - chromium-chromedriver
+#   chrome: stable
+#   firefox: latest
+cache:
+  directories:
+  - node_modules
+before_script:
+- node --version
+- npm --version
+# script:
+# - npm run test
+before_deploy:
+- npm install
+# - npm run build
+- npm run dist
+deploy:
+  edge: true
+  provider: npm
+  email: travis-ci@highspot.com
+  api_key:
+    secure: BbQ+uBAAzvEY37u3l0cm1WnLP1dpnojDC2BYoR5BzueEndBZ+B29hAkeGbkyc3y/FxXjeCcY9ZuAgi8zmgWDhXm1Jg0O+v54KF9SwJmFmXsrmzaiPGa7c2lxcZ2XCcq8MhWrjvEqslsiCe7EyHg/1E65KyowMSQbQHvyYzINg/FbUcO8UZbDqNuiLLUyX7w8NukBc8Dy576CrbwP9ADU5z7epFDmft1mfs3urxCSplwK2/+/A+DfmfLbHXXqdyaJhH5rPAejWIISSQs/kIW/Fu4mxX+pd5xx+eHc8vyBGnPCsrfb8I4RLMRoTvniMNRxM1DZCD3+AO3OFvPlDJbhfvX4zqKKw26p3aNde92fjpqQp6ekhI3/CxARF6HgdZZ/jEi4zPmYY4Wk8iIEFw/9OyEY5trtqvln70CzleKQKr+1cqM/kHBIDQjZQdKEMXyubHsdBHyarSsWrRm7V/Zgi7ZK16bGlwEUJteMnx8aY13zLC0tlBxJaqsAXO5d0XSabRLyUHS3fQPMcr95eaJoDVZa68IM1Z6X7SLHnjQPaLsOq5JgFooYNTf64dAQa5k25rdSs3rHCTtZEQKL+HqrilmVSyXCdzKQCZvbGcumCUmyaA1nCugLVUuKPmZ6BU11WyfrjutaQqtITdQkXueOMLvQnN59ORCIi0gu2zPMQM8=
+  on:
+    tags: true
+    # branch: master
+    tag: publish

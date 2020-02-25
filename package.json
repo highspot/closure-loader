@@ -1,9 +1,10 @@
 {
-  "name": "closure-loader",
+  "name": "@highspot/closure-loader",
   "version": "0.7.0",
   "description": "Webpack loader for google closure library dependencies",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
+    "dist": "gulp dist",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
@@ -19,13 +20,16 @@
     "type": "git",
     "url": "git://github.com/highspot/closure-loader.git"
   },
-  "author": "Steven Weingärtner",
+  "author": "Highspot",
   "contributors": [
     "Michael van Engelshoven <michael@van-engelshoven.de>",
     "Matthias Harmuth <mcpain83@gmail.com>",
     "Jeremy Klukan <jeremy.klukan@highspot.com>"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://npm.hspt.io"
+  },
   "peerDependencies": {
     "webpack": "^4.0.0"
   },
@@ -38,5 +42,9 @@
     "loader-utils": "^1.1.0",
     "lodash": "^4.17.4",
     "source-map": "^0.5.1"
+  },
+  "devDependencies": {
+    "delete": "^1.1.0",
+    "gulp": "^4.0.2"
   }
 }
