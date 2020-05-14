@@ -1,6 +1,6 @@
 {
   "name": "@highspot/closure-loader",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Webpack loader for google closure library dependencies",
   "main": "dist/index.js",
   "scripts": {
